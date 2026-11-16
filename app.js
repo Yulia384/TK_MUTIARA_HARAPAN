@@ -1,6 +1,9 @@
 // =========================================================================
-// APP.JS - LOGIKA INTERAKTIF, SUARA, GAMES, & CRUD (TAMBAH/UBAH/HAPUS)
+// APP.JS - LOGIKA INTERAKTIF, SUARA, GAMES, & SINKRONISASI GOOGLE SHEETS
 // =========================================================================
+
+// TEMPEL URL WEB APP DARI GOOGLE APPS SCRIPT DI BAWAH INI:
+const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzjCpIqCq9u2KnAH68vb8aLlTlYpfsChu2T8nXK2reU7AYhxBF2Q-XYBS7gwWOdLPMZzQ/exec";
 
 let studentsData = JSON.parse(localStorage.getItem('mutiara_students_v2')) || INITIAL_STUDENTS;
 let materialsData = JSON.parse(localStorage.getItem('mutiara_materials_v2')) || DEFAULT_MATERIALS;
@@ -17,6 +20,41 @@ function showSyncToast(msg) {
     }, 3000);
 }
 
+// =========================================================================
+// SINKRONISASI ONLINE (MENGAMBIL & MENGIRIM NILAI KE GOOGLE SHEETS)
+// =========================================================================
+async function fetchOnlineSubmissions() {
+    if (!GOOGLE_SCRIPT_URL || GOOGLE_SCRIPT_URL.includes("TEMPEL_URL")) return;
+    try {
+        showSyncToast("Menyinkronkan rekap nilai terbaru...");
+        const response = await fetch(GOOGLE_SCRIPT_URL);
+        const onlineData = await response.json();
+        if (Array.isArray(onlineData)) {
+            submissionsData = onlineData;
+            localStorage.setItem('mutiara_submissions_v2', JSON.stringify(submissionsData));
+            updateUI();
+            showSyncToast("Rekap nilai terbaru berhasil dimuat!");
+        }
+    } catch (error) {
+        console.error("Gagal mengambil data online:", error);
+    }
+}
+
+async function sendSubmissionToCloud(payload) {
+    if (!GOOGLE_SCRIPT_URL || GOOGLE_SCRIPT_URL.includes("TEMPEL_URL")) return;
+    try {
+        await fetch(GOOGLE_SCRIPT_URL, {
+            method: 'POST',
+            mode: 'no-cors',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        setTimeout(fetchOnlineSubmissions, 1500);
+    } catch (error) {
+        console.error("Gagal mengirim nilai ke server:", error);
+    }
+}
+
 function saveData(customMessage = "Perubahan berhasil disimpan!") {
     try {
         localStorage.setItem('mutiara_students_v2', JSON.stringify(studentsData));
@@ -25,7 +63,6 @@ function saveData(customMessage = "Perubahan berhasil disimpan!") {
         localStorage.setItem('mutiara_submissions_v2', JSON.stringify(submissionsData));
         localStorage.setItem('mutiara_announcements_v2', JSON.stringify(announcementsData));
     } catch (err) {
-        console.warn("Storage penuh (mungkin gambar terlalu besar), gunakan URL gambar.", err);
         alert("Penyimpanan browser penuh. Gunakan tautan/URL gambar daripada mengunggah foto berukuran besar.");
     }
     updateUI();
@@ -36,13 +73,7 @@ function saveData(customMessage = "Perubahan berhasil disimpan!") {
 // BACKUP & RESTORE JSON
 // =========================================================================
 function exportBackupJSON() {
-    const backup = {
-        studentsData,
-        materialsData,
-        readingData,
-        announcementsData,
-        submissionsData
-    };
+    const backup = { studentsData, materialsData, readingData, announcementsData, submissionsData };
     const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
@@ -138,7 +169,8 @@ function switchTab(tabId) {
 
     if (tabId === 'games') {
         initAllGames();
-    } else if (tabId === 'leaderboard') {
+    } else if (tabId === 'leaderboard' || tabId === 'excel' || tabId === 'dashboard') {
+        fetchOnlineSubmissions();
         renderLeaderboard();
     }
 }
@@ -205,8 +237,8 @@ function renderAnnouncements() {
                         <div class="flex justify-between items-center">
                             <span class="text-[10px] font-bold uppercase px-2.5 py-1 rounded-full bg-blue-100 text-blue-800">${ann.category}</span>
                             <div class="space-x-2">
-                                <button onclick="openAnnouncementModal('${ann.id}')" class="text-amber-600 hover:text-amber-800 text-xs font-bold cursor-pointer" title="Ubah"><i class="fa-solid fa-pen-to-square"></i> Ubah</button>
-                                <button onclick="deleteAnnouncement('${ann.id}')" class="text-red-500 hover:text-red-700 text-xs font-bold cursor-pointer" title="Hapus"><i class="fa-solid fa-trash"></i> Hapus</button>
+                                <button onclick="openAnnouncementModal('${ann.id}')" class="text-amber-600 hover:text-amber-800 text-xs font-bold cursor-pointer"><i class="fa-solid fa-pen-to-square"></i> Ubah</button>
+                                <button onclick="deleteAnnouncement('${ann.id}')" class="text-red-500 hover:text-red-700 text-xs font-bold cursor-pointer"><i class="fa-solid fa-trash"></i> Hapus</button>
                             </div>
                         </div>
                         <h3 class="kids-title text-lg font-bold text-slate-800 mt-2">${ann.title}</h3>
@@ -318,7 +350,7 @@ function addQuestionField(qData = null) {
         </div>
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-                <label class="block font-semibold text-slate-600 mb-1">Teks Pertanyaan (Akan Dibacakan Suara) *</label>
+                <label class="block font-semibold text-slate-600 mb-1">Teks Pertanyaan *</label>
                 <input type="text" class="q-text w-full px-3 py-2 border border-slate-300 rounded-xl" placeholder="Contoh: Hewan apa yang berkokok pagi hari?" value="${qData ? qData.text : ''}" required>
             </div>
             <div>
@@ -411,7 +443,7 @@ function renderMaterialsGrid() {
     const items = mapelFilter === 'ALL' ? materialsData : materialsData.filter(m => m.mapel === mapelFilter);
 
     items.forEach(mat => {
-        const subCount = submissionsData.filter(s => s.materialId === mat.id).length;
+        const subCount = submissionsData.filter(s => s.materialTitle === mat.title).length;
         grid.innerHTML += `
             <div class="bg-white border border-slate-200 rounded-3xl overflow-hidden shadow-sm hover:shadow-md transition flex flex-col justify-between">
                 <div>
@@ -546,7 +578,7 @@ function calculateResult() {
     const score = Math.round((correct / currentQuizMat.questions.length) * 100);
     const statusText = score >= 80 ? 'Sangat Baik 🌟' : score >= 60 ? 'Baik 👍' : 'Semangat Belajar 💪';
 
-    submissionsData.unshift({
+    const newSubmission = {
         id: Date.now(),
         materialId: currentQuizMat.id,
         studentName: currentStudent.name,
@@ -555,9 +587,13 @@ function calculateResult() {
         score: score,
         status: statusText,
         timestamp: new Date().toLocaleString('id-ID')
-    });
+    };
 
+    submissionsData.unshift(newSubmission);
     saveData(`Nilai ${currentStudent.name} (${score}) tersimpan!`);
+    
+    // Kirim data ke Google Sheets agar terlihat di HP Kepsek & semua perangkat
+    sendSubmissionToCloud(newSubmission);
 
     document.getElementById('quizStepQuestions').classList.add('hidden');
     document.getElementById('quizStepResult').classList.remove('hidden');
@@ -596,7 +632,7 @@ function downloadAsPDF() {
 function closeQuizModal() { closeModal('quizModal'); }
 
 // =========================================================================
-// 4. 5 MINI GAMES EDUKASI TK INTERAKTIF BERSUARA
+// 4. 5 MINI GAMES EDUKASI TK
 // =========================================================================
 function initAllGames() {
     initMemoryGame();
@@ -988,7 +1024,7 @@ function renderLeaderboard() {
 
     submissionsData.forEach(sub => {
         if (studentScores[sub.studentName]) {
-            studentScores[sub.studentName].totalScore += sub.score;
+            studentScores[sub.studentName].totalScore += Number(sub.score);
             studentScores[sub.studentName].count += 1;
         }
     });
@@ -1039,7 +1075,7 @@ function renderExcelTable() {
     const query = (document.getElementById('rekapSearchInput')?.value || '').toLowerCase();
     
     const filtered = submissionsData.filter(s => s.studentName.toLowerCase().includes(query));
-    document.getElementById('rekap-submisi-count').textContent = `Total: ${filtered.length} Submisi Tersimpan`;
+    document.getElementById('rekap-submisi-count').textContent = `Total: ${filtered.length} Submisi Tersinkronisasi Online`;
     tbody.innerHTML = '';
 
     if (filtered.length === 0) {
@@ -1066,8 +1102,9 @@ function renderExcelTable() {
 
 function deleteSubmission(id) {
     if (confirm("Hapus rekap nilai ini?")) {
-        submissionsData = submissionsData.filter(s => s.id !== id);
+        submissionsData = submissionsData.filter(s => String(s.id) !== String(id));
         saveData("Record nilai dihapus!");
+        sendSubmissionToCloud({ action: "delete", id: id });
     }
 }
 
@@ -1084,12 +1121,14 @@ function exportToCSV() {
 }
 
 function adminResetAssessmentCycle() {
-    if (confirm('Reset seluruh nilai pengerjaan kuis?')) {
+    if (confirm('Reset seluruh nilai pengerjaan kuis di semua perangkat?')) {
         submissionsData = [];
         saveData("Seluruh rekap nilai di-reset!");
+        sendSubmissionToCloud({ action: "reset" });
     }
 }
 
 window.onload = function() {
     updateUI();
+    fetchOnlineSubmissions();
 };
